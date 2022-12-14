@@ -116,7 +116,6 @@ Les zones blanches correspondent à des nuages.
 Les couleurs les plus vertes dessinent la vallée de Chamonix et le gradient des couleurs jaunes à roses refléte le gradient altitudinal des versants qui encadrent la vallée.
 
 
-## Import des couches SMOD
 ### Import des couches SMOD par année
 
 ```{r message=FALSE, warning=FALSE}

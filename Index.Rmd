@@ -1,0 +1,484 @@
+---
+title: "Projet télédétection / Master 2 ECOMONT"
+author: "Guillaume Terpereau, Marine Souchier et Axel Rosenstein"
+date: "`r Sys.Date()`"
+output: 
+  rmdformats::readthedown:
+    highlight: kate
+    number_sections: TRUE
+    tableOfContents: {
+      minHeadingLevel: 3,
+      maxHeadingLevel: 5,
+      
+    }
+    df_print: kable
+---
+Ce projet est réalisé dans le cadre du Master 2 ECOMONT et porte sur l'étude spatiale des données SMOD (date de fonte de la neige) et NDVI (indice de végétation par différence normalisée) obtenues sur une zone délimitée, située sur le territoire de la communauté de communes de la vallée de Chamonix.
+
+# Chargement des librairies
+***
+
+```{r message=FALSE, warning=FALSE}
+library(raster)
+library(dplyr)
+library(mblm)
+library(tiff)
+library(rgdal)
+library(rgeos)
+library(terra)
+library(basemaps)
+library(mapedit)
+library(rasterVis)
+library(RColorBrewer)
+library(tidyverse)
+```
+
+# Sources des données
+***
+
+## Données NDVI
+Institution(s):
+<br>
+Pôle THEIA du CNES (traitement des images Sentinel-2)
+<br>
+CREA Mont-Blanc (calcul du NDVI)
+<br>
+<br>
+Auteurs
+<br>
+Pôle THEIA - https://theia.cnes.fr/atdistrib/rocket/#/home
+<br>
+Brad Carlson (CREA Mont-Blanc)
+
+## Données CCVCMB
+Institution(s): Communauté de Communes de la Vallée de Chamonix Mont-Blanc (CCVCMB)
+
+## Données SMOD
+Données initiales
+<br>
+CESBIO Toulouse
+<br>
+Pôle THEIA du CNES
+<br>
+Accès : https://theia.cnes.fr/atdistrib/rocket/#/home
+<br>
+Citation : https://www.mdpi.com/2072-4292/12/18/2904/pdf
+<br>
+Contact : simon.gascoin@cesbio.cnes.fr
+<br>
+Traitement des données : 
+<br>
+CREA Mont Blanc
+<br>
+bcarlson@creamontblanc.org
+
+# Objectifs du projet
+***
+Notre projet a consisté à étudier s'il existait une corrélation entre l'évolution du SMOD et l'évolution du verdissement observé (via le calcul du paramètre NDVI), entre 2017 et 2021, sur une zone délimitée de la communauté de communes de la vallée de Chamonix (CCVCMB).
+
+# Analyse spatiale et statistique des données
+***
+## Import et description des couches raster
+
+### Import des couches NDVI par année
+
+```{r message=FALSE, warning=FALSE}
+rastlist.2017.NDVI <- list.files(path = "S2_NDVI_CCVCMB", pattern='2017', all.files=T, full.names=T)
+rasters.2017.NDVI <- stack(lapply(rastlist.2017.NDVI, raster))
+
+rastlist.2018.NDVI <- list.files(path = "S2_NDVI_CCVCMB", pattern='2018', all.files=T, full.names=T)
+rasters.2018.NDVI <- stack(lapply(rastlist.2018.NDVI, raster))
+
+rastlist.2019.NDVI <- list.files(path = "S2_NDVI_CCVCMB", pattern='2019', all.files=TRUE, full.names=T)
+rasters.2019.NDVI <- stack(lapply(rastlist.2019.NDVI, raster))
+
+rastlist.2020.NDVI <- list.files(path = "S2_NDVI_CCVCMB", pattern='2020', all.files=TRUE, full.names=T)
+rasters.2020.NDVI <- stack(lapply(rastlist.2020.NDVI, raster))
+
+rastlist.2021.NDVI <- list.files(path = "S2_NDVI_CCVCMB", pattern='2021', all.files=TRUE, full.names=T)
+rasters.2021.NDVI <- stack(lapply(rastlist.2021.NDVI, raster)) 
+```
+
+### Caractéristiques des couches NDVI
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+rasters.2020.NDVI
+```
+
+Les rasters des données NDVI issues du satellite Sentinel2 ont une résolution de 10 m par 10 m et sont projetés dans le référentiel SCR WGS84 / UTM zone 32N. 
+
+
+### Visualisation d'une couche NDVI (24/02/2020)
+```{r message=FALSE, warning=FALSE, echo=FALSE, fig.cap="Figure 1: Couche NDVI limitée à la CCVCMB le 24/02/2020"}
+plot(rasters.2020.NDVI[[1]])
+```
+Les zones blanches correspondent à des nuages.
+Les couleurs les plus vertes dessinent la vallée de Chamonix et le gradient des couleurs jaunes à roses refléte le gradient altitudinal des versants qui encadrent la vallée.
+
+
+## Import des couches SMOD
+### Import des couches SMOD par année
+
+```{r message=FALSE, warning=FALSE}
+SMOD_17 <- raster("Sentinel2_neige/SMOD_CCVCMB_2017.tif")
+SMOD_18 <- raster("Sentinel2_neige/SMOD_CCVCMB_2018.tif")
+SMOD_19 <- raster("Sentinel2_neige/SMOD_CCVCMB_2019.tif")
+SMOD_20 <- raster("Sentinel2_neige/SMOD_CCVCMB_2020.tif")
+SMOD_21 <- raster("Sentinel2_neige/SMOD_CCVCMB_2021.tif")
+```
+
+### Caractéristiques des couches SMOD
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+SMOD_17
+```
+Les rasters des données SMOD issues du satellite Sentinel2 ont une résolution de 20 m par 20 m et sont projetés dans le référentiel SCR WGS84 / UTM zone 32N. Il faut donc redimensionner les couches SMOD pour avoir la même résolution que les couches NDVI (10 m x 10 m).
+
+### Changement de la résolution des couches SMOD
+
+```{r message=FALSE, warning=FALSE}
+SMOD_17 <- resample(x = SMOD_17, y = rasters.2020.NDVI[[1]], method = "bilinear")
+SMOD_18 <- resample(x = SMOD_18, y = rasters.2020.NDVI[[1]], method = "bilinear")
+SMOD_19 <- resample(x = SMOD_19, y = rasters.2020.NDVI[[1]], method = "bilinear")
+SMOD_20 <- resample(x = SMOD_20, y = rasters.2020.NDVI[[1]], method = "bilinear")
+SMOD_21 <- resample(x = SMOD_21, y = rasters.2020.NDVI[[1]], method = "bilinear")
+SMOD_17
+```
+La résolution des couches SMOD a bien été modifiée.
+
+### Visualisation d'une couche SMOD (2017)
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, fig.cap="Figure 2: Couche SMOD en 2017 autour de la vallée de Chamonix"}
+plot(SMOD_17)
+```
+Des couleurs claires roses/jaunes sont associées à la vallée de Chamonix et donc à des zones pour lesquelles la neige fond précocement. Les couleurs vertes vives sont associées à des zones hautes en altitude pour lesquelles la neige fond tardivement ou jamais.
+
+### Application du masque CCVCMB aux couches SMOD
+#### Import des limites de la communautés de communes (CCVCMB)
+
+La couche correspondant aux limites de la CCVCMB est importée au préalable pour appliquer son emprise sur les couches SMOD afin d'obtenir des limites similaires aux couches NDVI. 
+
+```{r message=FALSE, warning=FALSE}
+CCVCMB <- shapefile("Communes/CC_Vallee_CHAMONIX.shp")
+CCVCMB <- spTransform(CCVCMB, CRS = crs("+proj=utm +zone=32 +datum=WGS84 +units=m +no_defs "))
+```
+
+La couche CCVCMB est également reprojetée dans le même référentiel SCR que les couches NDVI.
+
+#### Application du masque CCVCMB
+
+```{r message=FALSE, warning=FALSE}
+SMOD_17M <- mask(SMOD_17, CCVCMB)
+SMOD_18M<- mask(SMOD_18, CCVCMB)
+SMOD_19M<- mask(SMOD_19, CCVCMB)
+SMOD_20M<- mask(SMOD_20, CCVCMB)
+SMOD_21M<- mask(SMOD_21, CCVCMB)
+```
+
+#### Visualisation de l'effet du masque CCVCMB
+
+```{r out.width=c('50%', '50%'), fig.show='hold', message=FALSE, warning=FALSE, echo=FALSE, fig.cap="Figure 3: Visualisation de la couche SMOD 2017 après application du masque CCVCMB"}
+plot(SMOD_17, main="Avant application du masque")
+plot(SMOD_17M, main="Après application du masque")
+```
+
+## Préparation des tableaux NDVI max et SMOD
+
+L'objectif est désormais de calculer le NDVI max pour chaque année afin de pouvoir calculer la pente liée à l'évolution du NDVI max sur les cinq années d'étude (2017-2021). La pente associée à l'évolution des couches SMOD sur les cinq mêmes années sera également calculée.
+
+### Calcul NDVI max par année
+
+Les rasters et les tableaux associés aux NDVI max sont générés.
+
+```{r message=FALSE, warning=FALSE}
+NDVImax.2017 <- max(rasters.2017.NDVI, na.rm=T)
+NDVImax.2017_df <- as.matrix(NDVImax.2017)
+
+NDVImax.2018 <- max(rasters.2018.NDVI, na.rm=T)
+NDVImax.2018_df <- as.matrix(NDVImax.2018)
+
+NDVImax.2019 <- max(rasters.2019.NDVI, na.rm=T)
+NDVImax.2019_df <- as.matrix(NDVImax.2019)
+
+NDVImax.2020 <- max(rasters.2020.NDVI, na.rm=T)
+NDVImax.2020_df <- as.matrix(NDVImax.2020)
+
+NDVImax.2021 <- max(rasters.2021.NDVI, na.rm=T)
+NDVImax.2021_df <- as.matrix(NDVImax.2021)
+```
+
+### Visualisation NDVI max par année
+
+```{r out.width=c('33%', '33%', '33%'), fig.show='hold', message=FALSE, warning=FALSE, echo=FALSE}
+breaks <- seq(-1,1, by=0.01)
+colors= colorRampPalette(c("#FF66CC", "#fff7bc", "#006600"))
+levelplot(NDVImax.2017, at=breaks, margin=F, col.regions=colors, main="2017")
+levelplot(NDVImax.2018, at=breaks, margin=F, col.regions=colors, main="2018")
+levelplot(NDVImax.2019, at=breaks, margin=F, col.regions=colors, main="2019")
+```
+
+```{r out.width=c('33%', '33%'), fig.show='hold', message=FALSE, warning=FALSE, echo=FALSE, fig.cap="Figure 4: Couches NDVI max par année"}
+levelplot(NDVImax.2020, at=breaks, margin=F, col.regions=colors, main="2020")
+levelplot(NDVImax.2021, at=breaks, margin=F, col.regions=colors, main="2021")
+```
+
+Peu de variations sont observées sur les 5 années. Un léger front de verdissement est observé sur le versant est de Chamonix mais il reste compliqué d'identifier des changements facilement observables.
+
+### Homogénéisation du nombre de pixels entre les 5 années pour les couches SMOD et NDVI max
+
+Les masques des couches présentant les nombres de pixels différents de "NA" les plus faibles sont appliqués à l'ensemble des couches afin d'obtenir un nombre de pixels similaire pour l'ensemble des couches.
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+length(NDVImax.2017[which(!is.na(NDVImax.2017[]))])
+length(NDVImax.2018[which(!is.na(NDVImax.2018[]))])
+length(NDVImax.2019[which(!is.na(NDVImax.2019[]))])
+length(NDVImax.2020[which(!is.na(NDVImax.2020[]))])
+length(NDVImax.2021[which(!is.na(NDVImax.2021[]))])
+
+NDVImax.2017<-mask(NDVImax.2017, NDVImax.2021)
+NDVImax.2018<-mask(NDVImax.2018, NDVImax.2021)
+NDVImax.2019<-mask(NDVImax.2019, NDVImax.2021)
+NDVImax.2020<-mask(NDVImax.2020, NDVImax.2021)
+NDVImax.2021<-mask(NDVImax.2021, NDVImax.2021)
+```
+
+```{r message=FALSE, warning=FALSE}
+NDVImax.2017<-mask(NDVImax.2017, NDVImax.2020)
+NDVImax.2018<-mask(NDVImax.2018, NDVImax.2020)
+NDVImax.2019<-mask(NDVImax.2019, NDVImax.2020)
+NDVImax.2020<-mask(NDVImax.2020, NDVImax.2020)
+NDVImax.2021<-mask(NDVImax.2021, NDVImax.2020)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+length_NDVI <-c(length(NDVImax.2017[which(!is.na(NDVImax.2017[]))]),
+length(NDVImax.2018[which(!is.na(NDVImax.2018[]))]),
+length(NDVImax.2019[which(!is.na(NDVImax.2019[]))]),
+length(NDVImax.2020[which(!is.na(NDVImax.2020[]))]),
+length(NDVImax.2021[which(!is.na(NDVImax.2021[]))]))
+SMOD_17M <- mask(SMOD_17M, NDVImax.2017)
+SMOD_18M<- mask(SMOD_18M, NDVImax.2017)
+SMOD_19M<- mask(SMOD_19M, NDVImax.2017)
+SMOD_20M<- mask(SMOD_20M, NDVImax.2017)
+SMOD_21M<- mask(SMOD_21M, NDVImax.2017)
+```
+
+```{r message=FALSE, warning=FALSE}
+SMOD_17M <- mask(SMOD_17M, SMOD_18M)
+SMOD_18M<- mask(SMOD_18M, SMOD_18M)
+SMOD_19M<- mask(SMOD_19M, SMOD_18M)
+SMOD_20M<- mask(SMOD_20M, SMOD_18M)
+SMOD_21M<- mask(SMOD_21M, SMOD_18M)
+
+NDVImax.2017 <- mask(NDVImax.2017, SMOD_17M)
+NDVImax.2018 <- mask(NDVImax.2018, SMOD_17M)
+NDVImax.2019 <- mask(NDVImax.2019, SMOD_17M)
+NDVImax.2020 <- mask(NDVImax.2020, SMOD_17M)
+NDVImax.2021 <- mask(NDVImax.2021, SMOD_17M)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE, echo=FALSE}
+length_NDVI <-c(length(NDVImax.2017[which(!is.na(NDVImax.2017[]))]),
+length(NDVImax.2018[which(!is.na(NDVImax.2018[]))]),
+length(NDVImax.2019[which(!is.na(NDVImax.2019[]))]),
+length(NDVImax.2020[which(!is.na(NDVImax.2020[]))]),
+length(NDVImax.2021[which(!is.na(NDVImax.2021[]))]))
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+length_SMOD <-c(length(SMOD_17M[which(!is.na(SMOD_17M[]))]),
+length(SMOD_18M[which(!is.na(SMOD_18M[]))]),
+length(SMOD_19M[which(!is.na(SMOD_19M[]))]),
+length(SMOD_20M[which(!is.na(SMOD_20M[]))]),
+length(SMOD_21M[which(!is.na(SMOD_21M[]))]))
+```
+
+Nombre de pixels des couches SMOD:
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+length_SMOD
+```
+
+Nombre de pixels des couches NDVI:
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+length_NDVI
+```
+
+Le nombre de pixels est désormais identique pour l'ensemble des couches NDVI max et SMOD.
+
+
+### Réduction de la zone d'étude
+
+Le nombre de pixels étant très important, le script requiert 6 heures de calcul pour être exécuté. Dans le cadre de notre projet étudiant, le choix a donc été de délimiter une zone d'étude restreinte afin de réduire le temps de calcul nécessaire.
+
+#### Extraction d'une portion des jeux de données raster
+
+Une zone a été définie manuellement pour couvrir à la fois la vallée et les versants et a été appliquée aux rasters NDVI et SMOD, afin d'extraire une portion de ces rasters selon un modèle d'étendue.
+
+```{r message=FALSE, warning=FALSE}
+cropbox2 <-c(336000,339000,5083000,5086000)
+SMODcrop17 <- crop(SMOD_17M, cropbox2)
+SMODcrop18 <- crop(SMOD_18M, cropbox2)
+SMODcrop19 <- crop(SMOD_19M, cropbox2)
+SMODcrop20 <- crop(SMOD_20M, cropbox2)
+SMODcrop21 <- crop(SMOD_21M, cropbox2)
+
+NDVIcrop17 <- crop(NDVImax.2017, cropbox2)
+NDVIcrop18 <- crop(NDVImax.2018, cropbox2)
+NDVIcrop19 <- crop(NDVImax.2019, cropbox2)
+NDVIcrop20 <- crop(NDVImax.2020, cropbox2)
+NDVIcrop21 <- crop(NDVImax.2021, cropbox2)
+```
+
+#### Visualisation du découpage appliqué
+
+```{r, fig.show='hold', message=FALSE, warning=FALSE, echo=FALSE, fig.cap="Figure 5: Visualisation de la couche SMOD 2017 après découpage selon une zone délimitée"}
+plot(SMODcrop17)
+```
+
+### Préparation du tableau de données NDVI max
+
+Les données de NDVI max sont récupérées pour chaque année et pour chaque pixel.
+
+```{r message=FALSE, warning=FALSE}
+NDVI_all <- data.frame(NDVI2017=NDVIcrop17[which(!is.na(NDVIcrop17[]))],NDVI2018=NDVIcrop18[which(!is.na(NDVIcrop18[]))],NDVI2019=NDVIcrop19[which(!is.na(NDVIcrop19[]))],NDVI2020=NDVIcrop20[which(!is.na(NDVIcrop20[]))],NDVI2021=NDVIcrop21[which(!is.na(NDVIcrop21[]))])
+head(NDVI_all)
+```
+
+### Préparation du tableau de données SMOD
+
+De même, les données de SMOD sont récupérées pour chaque année et pour chaque pixel.
+
+```{r message=FALSE, warning=FALSE}
+SMOD_all <- data.frame(SMOD17M = SMODcrop17[which(!is.na(SMODcrop17[]))], SMOD18M = SMODcrop18[which(!is.na(SMODcrop18[]))], SMOD19M = SMODcrop19[which(!is.na(SMODcrop19[]))], SMOD20M = SMODcrop20[which(!is.na(SMODcrop20[]))], SMOD21M = SMODcrop21[which(!is.na(SMODcrop21[]))])
+head(SMOD_all)
+```
+
+## Calcul des pentes de tendance
+
+La suite du projet consiste à calculer les pentes de tendance sur les 5 années à la fois pour les données NDVI max et SMOD.
+Le jeu de données est très faible (seulement 5 années) mais l'objectif de ce projet était surtout de définir une méthode d'analyse bien que celle ci soit plus adaptée à une série temporelle plus longue.
+
+### Calcul des pentes pour le NDVI max
+#### Boucle de calcul des pentes et des pvalue associées
+
+```{r message=FALSE, warning=FALSE}
+Greening <- data.frame(Pente = rep(NA, nrow(NDVI_all)),
+                    Pvalue = rep(NA, nrow(NDVI_all)))
+
+for(n in 1:nrow(NDVI_all)){
+  
+  ndvi_pixel = data.frame(NDVI = as.numeric(NDVI_all[n,]), Year = c(2017:2021))
+  Pente <- summary(mblm(NDVI ~ Year, data=ndvi_pixel))$coefficients[2,1]
+  Pvalue <- summary(mblm(NDVI ~ Year, data=ndvi_pixel))$coefficients[2,4]
+  
+  Greening[n,"Pente"] <- Pente
+  Greening[n,"Pvalue"] <- Pvalue
+}
+```
+
+#### Génération du raster des pentes NDVI max
+
+```{r message=FALSE, warning=FALSE}
+NDVI_pente <- NDVIcrop17
+NDVI_pente[which(!is.na(NDVI_pente[]))]=Greening[,"Pente"]
+```
+
+```{r, fig.show='hold', message=FALSE, warning=FALSE, echo=FALSE, fig.cap="Figure 6: Raster des pentes associées à l'évolution du NDVI max entre 2017 et 2021"}
+plot(NDVI_pente, main = "Pente NDVI max 2017 - 2021")
+```
+
+Comme attendu, la plupart des pentes sont proches de 0 traduisant une faible évolution des données NDVI max sur les 5 années considérées.
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, include=FALSE}
+writeRaster(NDVI_pente, "NDVI_pente.tif", overwrite = T)
+```
+
+### Calcul des pentes pour le SMOD
+#### Boucle de calcul des pentes et des pvalue associées
+
+```{r message=FALSE, warning=FALSE}
+Melting <- data.frame(Pente = rep(NA, nrow(SMOD_all)),
+                    Pvalue = rep(NA, nrow(SMOD_all)))
+
+for(n in 1:nrow(SMOD_all)){
+  
+  SMOD_pixel = data.frame(SMOD = as.numeric(SMOD_all[n,]), Year = c(2017:2021))
+  Pente <- summary(mblm(SMOD ~ Year, data=SMOD_pixel))$coefficients[2,1] 
+  Pvalue <- summary(mblm(SMOD ~ Year, data=SMOD_pixel))$coefficients[2,4]
+  
+  Melting[n,"Pente"] <- Pente
+  Melting[n,"Pvalue"] <- Pvalue
+}
+```
+
+#### Génération du raster des pentes SMOD
+
+
+```{r message=FALSE, warning=FALSE}
+SMOD_pente <- SMODcrop17
+SMOD_pente[which(!is.na(SMOD_pente[]))]=Melting[,"Pente"]
+```
+
+```{r, fig.show='hold', message=FALSE, warning=FALSE, echo=FALSE, fig.cap="Figure 7: Raster des pentes associées à l'évolution du SMOD entre 2017 et 2021"}
+plot(SMOD_pente,  main = "Pente SMOD 2017 - 2021")
+```
+
+Les valeurs de pente positives sont plutôt liées aux zones de vallée alors que les valeurs négatives sont plutôt liées aux versants traduisant surtout une précocité de la fonte des neiges sur les versants.
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, include=FALSE}
+writeRaster(SMOD_pente, "SMOD_pente.tif", overwrite=T)
+```
+
+## Etude de la corrélation entre l'évolution du NDVI max et l'évolution du SMOD
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, include=FALSE}
+colnames(Greening) <- c("GreeningPente","GreeningPvalue")
+colnames(Melting) <- c("MeltingPente","MeltingPvalue")
+df <-cbind(Greening, Melting)
+```
+
+Un modèle linéaire est appliqué aux deux variables quantitatives.
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+lm1 <-lm(df$GreeningPente ~ df$MeltingPente)
+summary(lm1)
+```
+
+```{r, fig.show='hold', message=FALSE, warning=FALSE, echo=FALSE, fig.cap="Figure 8: Relation entre NDVI max et SMOD"}
+ggplot(df)+
+  geom_point(aes(x=MeltingPente,y=GreeningPente))+
+  geom_smooth(aes(x=MeltingPente,y=GreeningPente),method="lm")+
+  xlab("Pente SMOD")+
+  ylab("Pente NDVI max")
+```
+Une très faible relation négative attendue est observée entre l'évolution du SMOD et l'évolution du NDVI max.
+
+Cependant, le modèle a été appliqué à l'ensemble des pixels sans tri préalable des pentes en fonction de la p value associée.
+
+La relation est à nouveau testée seulement pour les pixels qui présentent les pvalue les plus faibles (p value < 0.07).
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+df2<-df[df$GreeningPvalue<0.07,]
+df2<-df2[df2$MeltingPvalue<0.07,]
+lm2 <-lm(df2$GreeningPente ~ df2$MeltingPente)
+summary(lm2)
+```
+
+```{r, fig.show='hold', message=FALSE, warning=FALSE, echo=FALSE, fig.cap="Figure 9: Relation entre NDVI max et SMOD pour les p values faibles"}
+ggplot(df2)+
+  geom_point(aes(x=MeltingPente,y=GreeningPente))+
+  geom_smooth(aes(x=MeltingPente,y=GreeningPente),method="lm")+
+  xlab("Pente SMOD")+
+  ylab("Pente NDVI max")
+```
+
+Une relation négative est observée entre l'évolution du SMOD et le NDVI max (p value < 0.01). Ainsi, des valeurs de SMOD faibles (dates de fonte précoces) seraient liées à des valeurs de NDVI élevées. 
+<br>
+Ce phénomène peut être expliqué par des périodes végétatives plus longues permises par une fonte précoce de la neige qui favoriseraient le verdissement de ces zones.
+<br>
+Cependant, le R2 associé à la relation linéaire est très faible (0.06), probablement en raison du nombre de données élevé issues de zones très diversifiées qui peut augmenter la variabilité observée et du faible nombre d'années étudiées qui ne permet pas d'avoir des évolutions significatives. En effet, peu de variations du NDVI max étaient observées sur les 5 années considérées.
+<br>
+Il faudrait appliquer ce modèle à une série temporelle plus longue ou à une zone d'étude plus homogène (exposition, altitude, type d'habitats) pour vérifier l'existence d'une corrélation entre les deux variables.
+
+
+
